@@ -1,4 +1,5 @@
 
+#define EIGEN_DONT_PARALLELIZE
 #ifndef _MSC_VER
 #include "update_ops_cpp.hpp"
 extern "C"{
@@ -11,7 +12,6 @@ extern "C"{
 #include <Eigen/Core>
 
 void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UINT target_qubit_index_count, const CTYPE* matrix, CTYPE* state, ITYPE dim) {
-
     // matrix dim, mask, buffer
     const ITYPE matrix_dim = 1ULL << target_qubit_index_count;
     const ITYPE* matrix_mask_list = create_matrix_mask_list(target_qubit_index_list, target_qubit_index_count);
@@ -26,6 +26,9 @@ void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UI
     const ITYPE loop_dim = dim >> target_qubit_index_count;
 
     ITYPE state_index;
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
     for(state_index = 0 ; state_index < loop_dim ; ++state_index ){
         // create base index
         ITYPE basis_0 = state_index;
@@ -51,7 +54,7 @@ void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UI
 }
 
 void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UINT target_qubit_index_count, const Eigen::Matrix<std::complex<double>,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>& eigen_matrix, CTYPE* state, ITYPE dim){
-    // matrix dim, mask, buffer
+	// matrix dim, mask, buffer
     const ITYPE matrix_dim = 1ULL << target_qubit_index_count;
     const ITYPE* matrix_mask_list = create_matrix_mask_list(target_qubit_index_list, target_qubit_index_count);
     Eigen::VectorXcd buffer(matrix_dim);
@@ -64,7 +67,10 @@ void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UI
     const ITYPE loop_dim = dim >> target_qubit_index_count;
 
     ITYPE state_index;
-    for(state_index = 0 ; state_index < loop_dim ; ++state_index ){
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+	for(state_index = 0 ; state_index < loop_dim ; ++state_index ){
         // create base index
         ITYPE basis_0 = state_index;
         for(UINT cursor=0; cursor < target_qubit_index_count ; cursor++){
@@ -90,7 +96,7 @@ void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UI
 
 void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UINT target_qubit_index_count, const Eigen::MatrixXcd& eigen_matrix, CTYPE* state, ITYPE dim) {
 
-    // matrix dim, mask, buffer
+	// matrix dim, mask, buffer
     const ITYPE matrix_dim = 1ULL << target_qubit_index_count;
     const ITYPE* matrix_mask_list = create_matrix_mask_list(target_qubit_index_list, target_qubit_index_count);
     std::complex<double>* cppstate = reinterpret_cast<std::complex<double>*>(state);
@@ -103,7 +109,10 @@ void multi_qubit_dense_matrix_gate_eigen(const UINT* target_qubit_index_list, UI
     const ITYPE loop_dim = dim >> target_qubit_index_count;
 
     ITYPE state_index;
-    for(state_index = 0 ; state_index < loop_dim ; ++state_index ){
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+	for(state_index = 0 ; state_index < loop_dim ; ++state_index ){
         // create base index
         ITYPE basis_0 = state_index;
         for(UINT cursor=0; cursor < target_qubit_index_count ; cursor++){
