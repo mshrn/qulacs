@@ -69,7 +69,7 @@ std::string get_cpu_name(){
 
 int main() {
 	const UINT min_qubit_count = 2;
-	const UINT max_qubit_count = 25;
+	const UINT max_qubit_count = 27;
 	const double timeout = 0.1;
 	const UINT max_repeat = 10;
 	const UINT max_dense_qubit_count = 5;
