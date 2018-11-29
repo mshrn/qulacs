@@ -9,9 +9,9 @@ from qulacs.state import inner_product
 from scipy import optimize
 
 
-def xor_test():
-    xors = XOR_simulator(2)
-    xors.learn([0b01], 10, [0.0, np.pi/2, -np.pi/2])
+def xor_test(depth=1):
+    xors = XOR_simulator(2, depth=depth)
+    xors.learn([0b01], 2000, [0.01, 1, -np.pi/2])
 
 
 def TEST():
@@ -282,8 +282,8 @@ class XOR_simulator:
         for i in range(iteration):
             results = optimize.minimize(self.weights2loss, weights,
                                         method="Nelder-Mead",
-                                        options={"adaptive": True,
-                                                 "maxiter": 5})
+                                        options={"adaptive": False,
+                                                 "maxiter": 3})
             err = abs(results["fun"]+1)
             print("{}, weight: {}, err: {}".format(i, results["x"], err))
             print(self._state)
