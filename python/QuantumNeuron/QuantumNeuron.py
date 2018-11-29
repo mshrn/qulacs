@@ -11,7 +11,7 @@ from scipy import optimize
 
 def xor_test(depth=1):
     xors = XOR_simulator(2, depth=depth)
-    xors.learn([0b01], 2000, [0.01, 1, -np.pi/2])
+    xors.learn([0b01], 20, [0.01, 1, -np.pi/2])
 
 
 def TEST():
@@ -267,14 +267,15 @@ class XOR_simulator:
 
     def learn(self, train_data_list, iteration, weights=None, loss_tol=1e-9):
 
-        self.state = self.qns.set_state(train_data_list)
-        self.initial_state = self.state.copy()
-
         if weights is None:
             # biasの分を足す: self.num_inputbit + 1．
             weights = np.random.rand(self.input_bit_count + 1)
         else:
             weights = np.array(weights)
+
+        print("initial weights: {}".format(weights))
+        self.state = self.qns.set_state(train_data_list)
+        self.initial_state = self.state.copy()
 
         self.weights_list = []
         self.error_list = []
