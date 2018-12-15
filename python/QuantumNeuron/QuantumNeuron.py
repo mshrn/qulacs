@@ -1,5 +1,7 @@
+import os
 import sys
 from argparse import ArgumentParser
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,9 +11,14 @@ from qulacs.state import inner_product
 from scipy import optimize
 
 
+def main_xor():
+    for depth in range(1, 8):
+        xor_test(depth)
+
+
 def xor_test(depth=1):
     xors = XOR_simulator(2, depth=depth)
-    xors.learn([0b01], 20, [0.01, 1, -np.pi/2])
+    xors.learn([0b01, 0b10], 500, [0, 0, 0])
 
 
 def TEST():
@@ -32,23 +39,23 @@ class QuantumNeuralSystem:
     0b000XXXXXとなる(depthの分だけ0-padされる)．
     '''
 
-    def __init__(self, input_bit_count, depth=1):
+    def __init__(self, input_bit_size, depth=1):
         '''
         Args:
             ancilla_bit_count(uint): number of ancilla bits
             depth(uint): size of quantum neuron circuit
             initial_weights(array-like): weights of NN
         '''
-        self.input_bit_count = input_bit_count
+        self.input_bit_size = input_bit_size
         self.depth = depth
 
-        self.qubit_count = self.input_bit_count + self.depth + 1
+        self.qubit_count = self.input_bit_size + self.depth + 1
 
     def set_state(self, input_bits, show_initial_state=True):
         self.state = QuantumState(self.qubit_count)
 
         probs = np.ones(2 ** self.qubit_count)*0
-        probs[input_bits] = 1.0/len(input_bits)
+        probs[input_bits] = 1.0/np.sqrt(len(input_bits))
         self.state.load(probs)
 
         print("Initial state:")
@@ -129,7 +136,7 @@ class QuantumNeuralSystem:
             state.load(_state)
 
     def debug_gate(self, input_bit, angle=np.pi/2):
-        weights = np.ones(self.input_bit_count + 1) * angle
+        weights = np.ones(self.input_bit_size + 1) * angle
         self.set_weights(weights)
         self.set_state(input_bit)
 
@@ -171,9 +178,9 @@ class QuantumNeuralSystem:
         RUSの基本回路(測定は別で行う)を作成する．
         '''
         if self.weights is None:
-            self.weights = np.ones(self.input_bit_count + 1) * np.pi / 2
+            self.weights = np.ones(self.input_bit_size + 1) * np.pi / 2
 
-        target = self.input_bit_count
+        target = self.input_bit_size
 
         # R_y
         self.unit_gate = RY(target, self.weights[0])
@@ -206,13 +213,13 @@ class QuantumNeuralSystem:
 
         return self.prob_in_each_steps
 
-    def _step_update_state(self, step, state, show_prob=True,
+    def _step_update_state(self, step, state, show_prob=False,
                            show_before_projection=False):
         '''
         helper: 各ステップにおけるゲート作用
         '''
-        _control = self.input_bit_count + step - 1
-        _target = self.input_bit_count + step
+        _control = self.input_bit_size + step - 1
+        _target = self.input_bit_size + step
 
         if step > 1:
             self._step_update_state(step - 1, state)
@@ -245,8 +252,8 @@ class QuantumNeuralSystem:
         if step > 1:
             self._add_step_neuron_circuit(step - 1)
 
-            _control = self.input_bit_count + step - 1
-            _target = self.input_bit_count + step
+            _control = self.input_bit_size + step - 1
+            _target = self.input_bit_size + step
             ciY = self._get_ciYgate(_control, _target)
             self.nc.add_gate(ciY)
 
@@ -257,21 +264,29 @@ class QuantumNeuralSystem:
 
 
 class XOR_simulator:
-    def __init__(self, input_bit_count, depth=1):
-        self.qns = QuantumNeuralSystem(input_bit_count, depth)
-        self.input_bit_count = input_bit_count
-        self.qubit_count = input_bit_count + depth + 1
+    def __init__(self, input_bit_size, depth=1):
+        self.qns = QuantumNeuralSystem(input_bit_size, depth)
+        self.input_bit_size = input_bit_size
+        self.qubit_count = input_bit_size + depth + 1
+        self.depth = depth
         self.measure_circuit = QuantumCircuit(self.qubit_count)
-        for i in range(self.input_bit_count):
-            self.measure_circuit.add_CNOT_gate(i, input_bit_count + depth)
+        for i in range(self.input_bit_size):
+            self.measure_circuit.add_CNOT_gate(i, input_bit_size + depth)
 
     def learn(self, train_data_list, iteration, weights=None, loss_tol=1e-9):
+        self.name = "d{}_in{}_{}".format(
+            self.depth, self.input_bit_size, train_data_list)
+
+        self.weights_ini = weights
+        self.output_path = Path("Output_{}".format(self.weights_ini))
+        if not self.output_path.exists():
+            os.mkdir(self.output_path)
 
         if weights is None:
             # biasの分を足す: self.num_inputbit + 1．
-            weights = np.random.rand(self.input_bit_count + 1)
+            self.weights = np.random.rand(self.input_bit_size + 1)
         else:
-            weights = np.array(weights)
+            self.weights = np.array(weights)
 
         print("initial weights: {}".format(weights))
         self.state = self.qns.set_state(train_data_list)
@@ -281,18 +296,26 @@ class XOR_simulator:
         self.error_list = []
 
         for i in range(iteration):
-            results = optimize.minimize(self.weights2loss, weights,
+            results = optimize.minimize(self.weights2loss, self.weights,
                                         method="Nelder-Mead",
                                         options={"adaptive": False,
                                                  "maxiter": 3})
-            err = abs(results["fun"]+1)
-            print("{}, weight: {}, err: {}".format(i, results["x"], err))
+            self.weights = results["x"]
+            err = abs(results["fun"])
+            print("{}, weight: {}, err: {}".format(i+1, results["x"], err))
             print(self._state)
-            self.weights_list.append([i, *results["x"]])
-            self.error_list.append([i, err])
+            self.weights_list.append([i+1, *results["x"]])
+            self.error_list.append([i+1, err])
 
             if err < loss_tol:
                 break
+
+        np.savetxt(self.output_path / "_".join([self.name, "err.txt"]),
+                   self.error_list,
+                   header="{}".format(self.weights_ini))
+        np.savetxt(self.output_path / "_".join([self.name, "weig.txt"]),
+                   self.weights_list,
+                   header="{}".format(self.weights_ini))
 
     def weights2loss(self, weights):
         self.qns.set_weights(weights)
@@ -301,7 +324,7 @@ class XOR_simulator:
 
         self.measure_circuit.update_quantum_state(self.state)
         _temp = inner_product(self.initial_state, self.state)
-        loss = -(_temp*np.conj(_temp)).real
+        loss = -(_temp*np.conj(_temp)).real + 1
 
         self.state.load(self.initial_state)
 
@@ -312,12 +335,11 @@ class XOR_simulator:
         return loss
 
     def plot_results(self):
-        fig, axs = plt.subplots(2)
+        fig, axs = plt.subplots()
         # ax.plot(self.weights_list[:, 0], self.weights_list[:, 1], "bo-")
-        axs[0].plot(self.error_list[:, 0], self.error_list[:, 1], "ro-")
-        for weight in self.weights_list[:, 1]:
-            axs[1].plot(self.weights_list[:, 0])
-        fig.show()
+        axs.plot(self.error_list[:, 0], self.error_list[:, 1], "ro-")
+
+        fig.savefig(self.name+"_err.png", self.error_list)
 
 
 def xor_bit(bit_sequence):
@@ -354,5 +376,5 @@ if __name__ == "__main__":
         TEST()
 
     else:
-        xor_test()
+        main_xor()
         # check_nelder_mead()
