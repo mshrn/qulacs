@@ -12,19 +12,65 @@ from scipy import optimize
 
 
 def main_xor():
-    for depth in range(1, 8):
-        xor_test(depth)
+    for depth in range(1, 6):
+        xor_learn(depth)
 
 
-def xor_test(depth=1):
+def xor_learn(depth=1):
     xors = XOR_simulator(2, depth=depth)
-    xors.learn([0b01, 0b10], 500, [0, 0, 0])
+    xors.learn([0b01, 0b00], 500, [0, 0, 0])
 
 
-def TEST():
-    qns = QuantumNeuralSystem(1)
-    qns.test_unit_gate()
-    qns.check_output()
+def test_xor(depth=1, bias=0, state=[0b01]):
+    b = bias
+    w1_w2_list = []
+    ws = np.linspace(-np.pi / 2, np.pi / 2, 100)
+    for w1 in ws:
+        w2_list = []
+        for w2 in ws:
+            xors = XOR_simulator(2, depth)
+            xors.set_state(state)
+            loss = xors.weights2loss([b, w1, w2])
+            w2_list.append(loss)
+
+        w1_w2_list.append(w2_list)
+
+    fig, ax = plt.subplots()
+    ax.imshow(np.meshgrid(ws, ws), w1_w2_list, cmap="jet")
+    plt.show()
+
+    return w1_w2_list
+
+
+def TEST_unit_gate(step=3):
+    vects = []
+    states = []
+    for angle in np.linspace(-np.pi, np.pi, 100):
+        qns = QuantumNeuralSystem(1, 1)
+        state = qns.set_state(0b001)
+
+        qns.set_weights([0, angle], step)
+        qns.unit_gate.update_quantum_state(state)
+
+        cos = np.sqrt((np.cos(2 * angle) ** 2 + 1) / 2)
+        sin = -np.sqrt((np.sin(2 * angle) ** 2) / 2)
+        tan0 = 1 / np.sqrt(1 + np.tan(angle) ** 4)
+        tan1 = np.tan(angle) ** 2 / np.sqrt(1 + np.tan(angle) ** 4)
+
+        vect = np.zeros(8)
+        vect[1] = cos * tan0
+        vect[5] = cos * tan1
+        vect[3] = sin * np.sqrt(1/2)
+        vect[7] = -sin * np.sqrt(1/2)
+
+        print("state: {}".format(state.get_vector()))
+        print("ans: {}".format(vect))
+        print("diff: {}".format(state.get_vector() - vect))
+
+        states.append(state.get_vector())
+        vects.append(vect)
+
+    return states, vects
 
 
 class QuantumNeuralSystem:
@@ -51,7 +97,7 @@ class QuantumNeuralSystem:
 
         self.qubit_count = self.input_bit_size + self.depth + 1
 
-    def set_state(self, input_bits, show_initial_state=True):
+    def set_state(self, *input_bits):
         self.state = QuantumState(self.qubit_count)
 
         probs = np.ones(2 ** self.qubit_count)*0
@@ -63,14 +109,140 @@ class QuantumNeuralSystem:
 
         return self.state
 
-    def set_weights(self, weights):
+    def set_weights(self, weights, step=3):
         '''
         weightsを設定し，RUS基本回路を更新する．
         '''
         self.weights = weights
+        self.set_unit_gate(step)
+
+    def set_unit_gate(self, step=3):
+        '''
+        RUSの基本回路(測定は別で行う)を作成する．
+        '''
+        target = self.input_bit_size
+        count = 0
+
+        # R_y
+        self.unit_gate = RY(target, -self.weights[0])
+        for control_bit, weight in enumerate(self.weights[1:]):
+            print(weight)
+            c_ry_mat = self._get_cRY_gate(-weight, control_bit, target)
+            self.unit_gate = merge(self.unit_gate, c_ry_mat)
+
+        count += 1
+        if count == step:
+            print("stop@1")
+            return self.unit_gate
+
+        # controlled-iY
+        y_target = target + 1
+        y_control = target
+        ciY = self._get_ciYgate(y_control, y_target)
+        self.unit_gate = merge(self.unit_gate, ciY)
+
+        count += 1
+        if count == step:
+            print("stop@2")
+            return self.unit_gate
+
+        # R_y^\dagger
+        self.unit_gate = merge(self.unit_gate, RY(target, self.weights[0]))
+        for control_bit, weight in enumerate(self.weights[1:]):
+            c_ry_mat = self._get_cRY_gate(weight, control_bit, target)
+            self.unit_gate = merge(self.unit_gate, c_ry_mat)
+
+        return self.unit_gate
+
+    def _get_cRY_gate(self, angle, control, target):
+        '''
+        helper: controlled RY gateの作成
+        '''
+        c_ry = RY(target, angle)
+        c_ry_mat = to_matrix_gate(c_ry)
+        c_ry_mat.add_control_qubit(control, 1)
+
+        return c_ry_mat
+
+    def _get_ciYgate(self, control, target):
+        '''
+        helper: controlled iY gateの作成
+        '''
+        iY = DenseMatrix(target, [[0, -1], [1, 0]])
+        iY.add_control_qubit(control, 1)
+
+        return iY
+
+    def _measure_0projection(self, target, state):
+        '''
+        helper: P0の射影を取り，確率を返す．
+        '''
+        _state = state.copy()
+        P0(target).update_quantum_state(state)
+
+        return inner_product(_state, state) / inner_product(_state, _state)
+
+    def update_quantum_state(self, state, **kwargs):
+        '''
+        量子状態に対して量子ニューロンのゲートを作用させる．
+        各ステップごとの成功確率を返す．
+        '''
+        self.prob_in_each_steps = []
+
+        self._step_update_state(self.depth, state, **kwargs)
+
+        return self.prob_in_each_steps
+
+    def _step_update_state(self, step, state, show_prob=False,
+                           show_before_projection=False):
+        '''
+        helper: 各ステップにおけるゲート作用
+        '''
+        _control = self.input_bit_size + step - 1
+        _target = self.input_bit_size + step
+
+        if step > 1:
+            self._step_update_state(step - 1, state)
+            ciY = self._get_ciYgate(_control, _target)
+            ciY.update_quantum_state(state)
+            self._step_update_state(step - 1, state)
+
+        else:
+            self.unit_gate.update_quantum_state(state)
+
+        # if show_before_projection:
+        #     print("Before projection:")
+        #     print(state)
+
+        # prob = self._measure_0projection(_target-1, state)
+        # self.prob_in_each_steps.append(prob)
+
+        # if show_prob:
+        #     print("prob: {}".format(prob))
+
+    def get_neuron_circuit(self):
+        self.nc = QuantumCircuit(self.qubit_count)
         self.set_unit_gate()
 
-    def test_unit_gate(self, angle=np.pi / 2):
+        self._add_step_neuron_circuit(self.depth)
+
+        return self.nc
+
+    def _add_step_neuron_circuit(self, step):
+        if step > 1:
+            self._add_step_neuron_circuit(step - 1)
+
+            _control = self.input_bit_size + step - 1
+            _target = self.input_bit_size + step
+            ciY = self._get_ciYgate(_control, _target)
+            self.nc.add_gate(ciY)
+
+            self._add_step_neuron_circuit(step - 1)
+
+        else:
+            self.nc.add_gate(self.unit_gate)
+
+    def debug_each_gate(self, angle=np.pi / 2):
         inputbit = 0
         ancilla = 1
         target = 2
@@ -107,161 +279,6 @@ class QuantumNeuralSystem:
 
         print("test unit_gate :End")
 
-    def check_output(self):
-        inputbit = 0
-        ancilla = 1
-        target = 2
-
-        state = QuantumState(3)
-        ciY = self._get_ciYgate(ancilla, target)
-
-        state.set_computational_basis(0b001)
-        _state = state.copy()
-
-        for angle in np.linspace(0, 2 * np.pi, 50):
-
-            cRY1 = self._get_cRY_gate(-angle, inputbit, ancilla)
-            cRY2 = self._get_cRY_gate(angle, inputbit, ancilla)
-
-            cRY1.update_quantum_state(state)
-            ciY.update_quantum_state(state)
-            cRY2.update_quantum_state(state)
-            P0(ancilla).update_quantum_state(state)
-
-            prob = inner_product(state, state)
-            ans = (np.cos(2*angle)**2+1)/2
-            print("angle: {}, prob: {}, err: {}".format(angle, prob, prob-ans))
-            print(state)
-
-            state.load(_state)
-
-    def debug_gate(self, input_bit, angle=np.pi/2):
-        weights = np.ones(self.input_bit_size + 1) * angle
-        self.set_weights(weights)
-        self.set_state(input_bit)
-
-        self.update_quantum_state(self.state, show_before_projection=True)
-
-        print("Updated(debug) state:")
-        print(self.state)
-
-    def _get_cRY_gate(self, angle, control, target):
-        '''
-        helper: controlled RY gateの作成
-        '''
-        c_ry = RY(target, angle)
-        c_ry_mat = to_matrix_gate(c_ry)
-        c_ry_mat.add_control_qubit(control, 1)
-
-        return c_ry_mat
-
-    def _get_ciYgate(self, control, target):
-        '''
-        helper: controlled iY gateの作成
-        '''
-        iY = DenseMatrix(target, [[0, 1], [-1, 0]])
-        iY.add_control_qubit(control, 1)
-
-        return iY
-
-    def _measure_0projection(self, target, state):
-        '''
-        helper: P0の射影を取り，確率を返す．
-        '''
-        _state = state.copy()
-        P0(target).update_quantum_state(state)
-
-        return inner_product(_state, state) / inner_product(_state, _state)
-
-    def set_unit_gate(self):
-        '''
-        RUSの基本回路(測定は別で行う)を作成する．
-        '''
-        if self.weights is None:
-            self.weights = np.ones(self.input_bit_size + 1) * np.pi / 2
-
-        target = self.input_bit_size
-
-        # R_y
-        self.unit_gate = RY(target, self.weights[0])
-        for control_bit, weight in enumerate(self.weights[1:]):
-            c_ry_mat = self._get_cRY_gate(weight, control_bit, target)
-            self.unit_gate = merge(self.unit_gate, c_ry_mat)
-
-        # controlled-iY
-        y_target = target + 1
-        y_control = target
-        ciY = self._get_ciYgate(y_control, y_target)
-        self.unit_gate = merge(self.unit_gate, ciY)
-
-        # R_y^\dagger
-        self.unit_gate = merge(self.unit_gate, RY(target, -self.weights[0]))
-        for control_bit, weight in enumerate(-self.weights[1:]):
-            c_ry_mat = self._get_cRY_gate(weight, control_bit, target)
-            self.unit_gate = merge(self.unit_gate, c_ry_mat)
-
-        return self.unit_gate
-
-    def update_quantum_state(self, state, **kwargs):
-        '''
-        量子状態に対して量子ニューロンのゲートを作用させる．
-        各ステップごとの成功確率を返す．
-        '''
-        self.prob_in_each_steps = []
-
-        self._step_update_state(self.depth, state, **kwargs)
-
-        return self.prob_in_each_steps
-
-    def _step_update_state(self, step, state, show_prob=False,
-                           show_before_projection=False):
-        '''
-        helper: 各ステップにおけるゲート作用
-        '''
-        _control = self.input_bit_size + step - 1
-        _target = self.input_bit_size + step
-
-        if step > 1:
-            self._step_update_state(step - 1, state)
-            ciY = self._get_ciYgate(_control, _target)
-            ciY.update_quantum_state(state)
-            self._step_update_state(step - 1, state)
-
-        else:
-            self.unit_gate.update_quantum_state(state)
-
-        if show_before_projection:
-            print("Before projection:")
-            print(state)
-
-        prob = self._measure_0projection(_target-1, state)
-        self.prob_in_each_steps.append(prob)
-
-        if show_prob:
-            print("prob: {}".format(prob))
-
-    def get_neuron_circuit(self):
-        self.nc = QuantumCircuit(self.qubit_count)
-        self.set_unit_gate()
-
-        self._add_step_neuron_circuit(self.depth)
-
-        return self.nc
-
-    def _add_step_neuron_circuit(self, step):
-        if step > 1:
-            self._add_step_neuron_circuit(step - 1)
-
-            _control = self.input_bit_size + step - 1
-            _target = self.input_bit_size + step
-            ciY = self._get_ciYgate(_control, _target)
-            self.nc.add_gate(ciY)
-
-            self._add_step_neuron_circuit(step - 1)
-
-        else:
-            self.nc.add_gate(self.unit_gate)
-
 
 class XOR_simulator:
     def __init__(self, input_bit_size, depth=1):
@@ -274,23 +291,24 @@ class XOR_simulator:
             self.measure_circuit.add_CNOT_gate(i, input_bit_size + depth)
 
     def learn(self, train_data_list, iteration, weights=None, loss_tol=1e-9):
-        self.name = "d{}_in{}_{}".format(
-            self.depth, self.input_bit_size, train_data_list)
-
-        self.weights_ini = weights
-        self.output_path = Path("Output_{}".format(self.weights_ini))
-        if not self.output_path.exists():
-            os.mkdir(self.output_path)
-
         if weights is None:
             # biasの分を足す: self.num_inputbit + 1．
-            self.weights = np.random.rand(self.input_bit_size + 1)
+            self.weights_ini = np.random.rand(self.input_bit_size + 1)
         else:
-            self.weights = np.array(weights)
+            self.weights_ini = np.array(weights)
 
-        print("initial weights: {}".format(weights))
-        self.state = self.qns.set_state(train_data_list)
-        self.initial_state = self.state.copy()
+        self.name = "d{}_in{}_{}_{}".format(self.depth,
+                                            self.input_bit_size,
+                                            train_data_list,
+                                            self.weights_ini)
+
+        self.output_path = Path("Results")/self.name
+
+        if not self.output_path.exists():
+            os.makedirs(self.output_path)
+
+        print("initial weights: {}".format(self.weights_ini))
+        self.set_state(train_data_list)
 
         self.weights_list = []
         self.error_list = []
@@ -317,7 +335,12 @@ class XOR_simulator:
                    self.weights_list,
                    header="{}".format(self.weights_ini))
 
+    def set_state(self, input_bits):
+        self.state = self.qns.set_state(input_bits)
+        self.initial_state = self.state.copy()
+
     def weights2loss(self, weights):
+        print(weights)
         self.qns.set_weights(weights)
         self.qns.update_quantum_state(self.state, show_prob=False)
         self._state = self.state.copy()
@@ -339,7 +362,7 @@ class XOR_simulator:
         # ax.plot(self.weights_list[:, 0], self.weights_list[:, 1], "bo-")
         axs.plot(self.error_list[:, 0], self.error_list[:, 1], "ro-")
 
-        fig.savefig(self.name+"_err.png", self.error_list)
+        fig.savefig(self.name + "_err.png", self.error_list)
 
 
 def xor_bit(bit_sequence):
