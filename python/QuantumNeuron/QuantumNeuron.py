@@ -94,26 +94,30 @@ def scan_xor(depth=1, bias=0, states=[0b01],
 
 #     return states, vects
 
+def play_xor_simulation(input_bit_size=2, depth=1, debug_mode=True,
+                        train_data_list=[0b01, 0b10], weights=[0, 0, 0]):
+    meas_circ = get_measurement_circuit("XOR", input_bit_size, depth)
+    qns = QuantumNeuralSystem(meas_circ, input_bit_size, depth, debug_mode)
+    qns.test(train_data_list, weights)
+
 
 class QuantumNeuralSystem:
     '''
-    入力(size: n_i), 量子回路の深さ: depth=dとすると，
-    |XXXXX>の下位から数えたインデックス
     0~n_i-1:input_qubit,
     n_i~n_i+d-1: ancilla_qubit,
-    n_i+d: output_qubit
-    例えばdepth=3とすると
-    初期設定する量子状態はinputをXXXXXで表現して
-    0b000XXXXXとなる(depthの分だけ0-padされる)．
+    n_i+d: output_qubit．
     '''
 
-    def __init__(self, input_bit_size, depth=1, debug_mode=False):
+    def __init__(self, measurement_circuit, input_bit_size, depth=1,
+                 debug_mode=False):
         '''
         Args:
-            ancilla_bit_count(uint): number of ancilla bits
-            depth(uint): size of quantum neuron circuit
-            initial_weights(array-like): weights of NN
+            measurement_circuit(QuantumCircuit): 訓練データの逆写像
+            input_bit_size(uint): number of ancilla bits
+            depth(uint): depth of quantum neural net(q-NN)
+            debug_mode(bool): in debug_mode, outputs some variables
         '''
+        self.measurement_circuit = measurement_circuit
         self.input_bit_size = input_bit_size
         self.depth = depth
 
@@ -121,19 +125,134 @@ class QuantumNeuralSystem:
 
         self.debug_mode = debug_mode
 
+    def test(self, train_data_list, weights):
+        """
+        RUS回路のテストのため，各作用を経た後の状態を出力していく．
+        Args:
+            train_data_list(array-like): training data
+            weights(array-like): initial weights
+        return loss
+        """
+        weights = np.array(weights)
+
+        self.set_state(*train_data_list)
+        if self.debug_mode:
+            print("Initial state:\n{}\n".format(self.state.get_vector()))
+
+        loss = self.weights2loss(weights)
+
+        if self.debug_mode:
+            print("After measurement:\n{}\n".format(
+                self.measured_state.get_vector()))
+
+            print("Loss: {}".format(loss))
+
+            print("Probs: {}".format(self.prob_in_each_steps))
+
+        return loss
+
+    def learn(self, train_data_list, weights=None,
+              iteration=500, loss_tol=1e-9, circuit_name="XOR"):
+        """
+        Args:
+            train_data_list(array-like): 訓練データのリスト
+            weights(array-like): 初期重みパラメーター
+            iteration(uint): イテレーション
+            loss_tol(float>0): lossの更新を終える許容値
+            circuit_name(str): 学習したい関数や回路の名前
+        return: None
+        """
+
+        # 出力先の決定
+        self.name = "{}_d{}_in{}_{}_{}".format(circuit_name,
+                                               self.depth,
+                                               self.input_bit_size,
+                                               train_data_list,
+                                               self.weights)
+        self.output_path = Path("Results")/self.name
+        if not self.output_path.exists():
+            os.makedirs(self.output_path)
+
+        # 重み
+        if weights is None:
+            # biasの分を足す: self.num_inputbit + 1．
+            self.weights = np.random.rand(self.input_bit_size + 1)
+        else:
+            self.weights = np.array(weights)
+
+        weights_init = self.weights
+
+        # 初期化
+        self.set_state(*train_data_list)
+        self.weights_list = []
+        self.error_list = []
+
+        # 学習
+        for i in range(iteration):
+            results = optimize.minimize(self.weights2loss, self.weights,
+                                        method="Nelder-Mead",
+                                        options={"adaptive": False,
+                                                 "maxiter": 3})
+            self.weights = results["x"]
+            err = abs(results["fun"])
+            print("{}, weight: {}, err: {}".format(i+1, results["x"], err))
+            # print(self._state)
+            self.weights_list.append([i+1, *results["x"]])
+            self.error_list.append([i+1, err])
+
+            if err < loss_tol:
+                break
+
+        np.savetxt(self.output_path / "_".join([self.name, "err.txt"]),
+                   self.error_list,
+                   header="{}".format(weights_init))
+
+        np.savetxt(self.output_path / "_".join([self.name, "weig.txt"]),
+                   self.weights_list,
+                   header="{}".format(weights_init))
+
+        self.set_weights(self.weights)
+
+    def weights2loss(self, weights):
+        """
+        ある重みに対するロスを返す
+        Args:
+            weights(array-like): 重み
+        """
+        self.set_weights(weights)
+        self.update_quantum_state(self.state)
+
+        self.measurement_circuit.update_quantum_state(self.state)
+        if self.debug_mode:
+            self.measured_state = self.state.copy()
+
+        _temp = inner_product(self.initial_state, self.state)
+
+        loss = -(_temp.conjugate()*_temp).real + 1
+
+        if np.abs(_temp) - 1 > 1e-6:
+            print("Something wrong with unitary operations: {}".format(_temp))
+
+        self.state.load(self.initial_state)
+
+        return loss
+
     def set_state(self, *input_bits):
         self.state = QuantumState(self.qubit_count)
 
-        probs = np.ones(2 ** self.qubit_count) * 0
-        for input_bit in input_bits:
-            probs[input_bit] = 1.0/np.sqrt(len(input_bits))
-        self.state.load(probs)
+        size = 2 ** self.qubit_count
+        _amp = 1.0 / np.sqrt(len(input_bits))
+        _temp = [_amp if i in input_bits else 0 for i in range(size)]
 
-        return self.state
+        self.state.load(_temp)
+        self.initial_state = self.state.copy()
 
     def set_weights(self, weights, step=3):
         '''
         weightsを設定し，RUS基本回路を更新する．
+        Args:
+            weights(array-like): 重み
+            step(0<uint<=3): debug用．通常3でよい．
         '''
         self.weights = weights
         self.set_unit_gate(step)
@@ -141,6 +260,8 @@ class QuantumNeuralSystem:
     def set_unit_gate(self, step=3):
         '''
         RUSの基本回路(測定は別で行う)を作成する．
+        Args:
+            step(0<uint<=3): debug用．通常3でよい．
         '''
         target = self.input_bit_size
         count = 0
@@ -178,6 +299,10 @@ class QuantumNeuralSystem:
     def _get_cRY_gate(self, angle, control, target):
         '''
         helper: controlled RY gateの作成
+        Args:
+            angle(float [rad]): 回転角
+            control: controlビット
+            target: targetビット
         '''
         c_ry = RY(target, angle)
         c_ry_mat = to_matrix_gate(c_ry)
@@ -188,6 +313,9 @@ class QuantumNeuralSystem:
     def _get_ciYgate(self, control, target):
         '''
         helper: controlled iY gateの作成
+        Args:
+            control: controlビット
+            target: targetビット
         '''
         iY = DenseMatrix(target, [[0, -1], [1, 0]])
         iY.add_control_qubit(control, 1)
@@ -200,10 +328,11 @@ class QuantumNeuralSystem:
         '''
         _state = state.copy()
         P0(target).update_quantum_state(state)
-        if self.debug_mode:
-            print("After projection : \n\t{}".format(state.get_vector()))
 
-        return inner_product(_state, state) / inner_product(_state, _state)
+        prob = inner_product(_state, state) / inner_product(_state, _state)
+        prob = prob.real
+
+        return prob
 
     def update_quantum_state(self, state):
         '''
@@ -213,8 +342,6 @@ class QuantumNeuralSystem:
         self.prob_in_each_steps = []
 
         self._step_update_state(self.depth, state)
-
-        return self.prob_in_each_steps
 
     def _step_update_state(self, step, state):
         '''
@@ -226,31 +353,29 @@ class QuantumNeuralSystem:
         if step > 1:
             self._step_update_state(step - 1, state)
             if self.debug_mode:
-                print("1st {}-size RUS:\n\t{}".format(step-1, state.get_vector()))
+                print("1st {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
             ciY = self._get_ciYgate(_control, _target)
             ciY.update_quantum_state(state)
             if self.debug_mode:
-                print("In step {} iY:\n\t{}".format(step, state.get_vector()))
+                print("In step {} iY:\n{}\n".format(step, state.get_vector()))
 
             self._step_update_state(step - 1, state)
             if self.debug_mode:
-                print("2nd {}-size RUS:\n\t{}".format(step-1, state.get_vector()))
+                print("2nd {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
 
         else:
             self.unit_gate.update_quantum_state(state)
 
-        if self.debug_mode:
-            print("Step {} Before projection:\n\t{}"
-                  .format(step, state.get_vector()))
+            if self.debug_mode:
+                print("unit {} RUS:\n{}\n"
+                      .format(step, state.get_vector()))
 
         prob = self._measure_0projection(_target-1, state)
         self.prob_in_each_steps.append(prob)
         if self.debug_mode:
-            print("Step {}: After projection: \n\t{}"
-                  .format(step, state.get_vector()))
-
-        if self.debug_mode:
             print("prob: {}".format(prob))
+            print("Step {}: After projection: \n{}\n"
+                  .format(step, state.get_vector()))
 
     def get_neuron_circuit(self):
         self.nc = QuantumCircuit(self.qubit_count)
@@ -275,117 +400,128 @@ class QuantumNeuralSystem:
             self.nc.add_gate(self.unit_gate)
 
 
-class XOR_simulator:
-    def __init__(self, input_bit_size, depth=1, debug_mode=False):
-        self.qns = QuantumNeuralSystem(input_bit_size, depth, debug_mode)
-        self.input_bit_size = input_bit_size
-        self.qubit_count = input_bit_size + depth + 1
-        self.depth = depth
-        self.measure_circuit = QuantumCircuit(self.qubit_count)
-        for i in range(self.input_bit_size):
-            self.measure_circuit.add_CNOT_gate(i, input_bit_size + depth)
+def get_measurement_circuit(name, input_bit_size, depth):
+    qubit_count = input_bit_size + depth + 1
+    measure_circuit = QuantumCircuit(qubit_count)
 
-        self.debug_mode = debug_mode
+    if name.upper() == "XOR":
+        for i in range(input_bit_size):
+            measure_circuit.add_CNOT_gate(i, input_bit_size + depth)
 
-    def test(self, train_data_list, weights):
-        """
-        Args:
-            debug: 各ゲートを作用させた後の状態を逐一表示する
-        """
-        weights = np.array(weights)
-        self.num_of_superpositon = len(train_data_list)
-        print("super position: {}".format(self.num_of_superpositon))
+    return measure_circuit
 
-        self.set_state(train_data_list)
-        if self.debug_mode:
-            print("Initial state:\n\t{}".format(self.state.get_vector()))
 
-        loss = self.weights2loss(weights)
-        if self.debug_mode:
-            print("Loss: {}".format(loss))
+# class XOR_simulator:
+#     def __init__(self, input_bit_size, depth=1, debug_mode=False):
+#         self.qns = QuantumNeuralSystem(input_bit_size, depth, debug_mode)
+#         self.input_bit_size = input_bit_size
+#         self.qubit_count = input_bit_size + depth + 1
+#         self.depth = depth
+#         self.measure_circuit = QuantumCircuit(self.qubit_count)
+#         for i in range(self.input_bit_size):
+#             self.measure_circuit.add_CNOT_gate(i, input_bit_size + depth)
 
-        if self.debug_mode:
-            print("After measurement:\n\t{}".format(
-                self.measured_state.get_vector()))
+#         self.debug_mode = debug_mode
 
-        return loss
+#     def test(self, train_data_list, weights):
+#         """
+#         Args:
+#             debug: 各ゲートを作用させた後の状態を逐一表示する
+#         """
+#         weights = np.array(weights)
+#         self.num_of_superpositon = len(train_data_list)
+#         print("super position: {}".format(self.num_of_superpositon))
 
-    def learn(self, train_data_list, iteration, weights=None, loss_tol=1e-9):
-        if weights is None:
-            # biasの分を足す: self.num_inputbit + 1．
-            self.weights = np.random.rand(self.input_bit_size + 1)
-        else:
-            self.weights = np.array(weights)
+#         self.set_state(train_data_list)
+#         if self.debug_mode:
+#             print("Initial state:\n\t{}".format(self.state.get_vector()))
 
-        weights_init = self.weights
+#         loss = self.weights2loss(weights)
+#         if self.debug_mode:
+#             print("Loss: {}".format(loss))
 
-        self.name = "d{}_in{}_{}_{}".format(self.depth,
-                                            self.input_bit_size,
-                                            train_data_list,
-                                            self.weights)
+#         if self.debug_mode:
+#             print("After measurement:\n\t{}".format(
+#                 self.measured_state.get_vector()))
 
-        self.output_path = Path("Results")/self.name
+#         return loss
 
-        if not self.output_path.exists():
-            os.makedirs(self.output_path)
+#     def learn(self, train_data_list, iteration, weights=None, loss_tol=1e-9):
+#         if weights is None:
+#             # biasの分を足す: self.num_inputbit + 1．
+#             self.weights = np.random.rand(self.input_bit_size + 1)
+#         else:
+#             self.weights = np.array(weights)
 
-        # print("initial weights: {}".format(self.weights))
-        self.set_state(train_data_list)
+#         weights_init = self.weights
 
-        self.weights_list = []
-        self.error_list = []
+#         self.name = "d{}_in{}_{}_{}".format(self.depth,
+#                                             self.input_bit_size,
+#                                             train_data_list,
+#                                             self.weights)
 
-        for i in range(iteration):
-            results = optimize.minimize(self.weights2loss, self.weights,
-                                        method="Nelder-Mead",
-                                        options={"adaptive": False,
-                                                 "maxiter": 3})
-            self.weights = results["x"]
-            err = abs(results["fun"])
-            print("{}, weight: {}, err: {}".format(i+1, results["x"], err))
-            # print(self._state)
-            self.weights_list.append([i+1, *results["x"]])
-            self.error_list.append([i+1, err])
+#         self.output_path = Path("Results")/self.name
 
-            if err < loss_tol:
-                break
+#         if not self.output_path.exists():
+#             os.makedirs(self.output_path)
 
-        np.savetxt(self.output_path / "_".join([self.name, "err.txt"]),
-                   self.error_list,
-                   header="{}".format(weights_init))
+#         # print("initial weights: {}".format(self.weights))
+#         self.set_state(train_data_list)
 
-        np.savetxt(self.output_path / "_".join([self.name, "weig.txt"]),
-                   self.weights_list,
-                   header="{}".format(weights_init))
+#         self.weights_list = []
+#         self.error_list = []
 
-    def set_state(self, input_bits):
-        self.state = self.qns.set_state(*input_bits)
-        self.initial_state = self.state.copy()
+#         for i in range(iteration):
+#             results = optimize.minimize(self.weights2loss, self.weights,
+#                                         method="Nelder-Mead",
+#                                         options={"adaptive": False,
+#                                                  "maxiter": 3})
+#             self.weights = results["x"]
+#             err = abs(results["fun"])
+#             print("{}, weight: {}, err: {}".format(i+1, results["x"], err))
+#             # print(self._state)
+#             self.weights_list.append([i+1, *results["x"]])
+#             self.error_list.append([i+1, err])
 
-    def weights2loss(self, weights):
-        self.qns.set_weights(weights)
-        self.qns.update_quantum_state(self.state)
-        self._state = self.state.copy()
+#             if err < loss_tol:
+#                 break
 
-        self.measure_circuit.update_quantum_state(self.state)
-        _temp = inner_product(self.initial_state, self.state)
+#         np.savetxt(self.output_path / "_".join([self.name, "err.txt"]),
+#                    self.error_list,
+#                    header="{}".format(weights_init))
 
-        self.measured_state = self.state.copy()
-        loss = -(_temp.conjugate()*_temp).real * \
-            np.sqrt(self.num_of_superpositon) + 1
-        if np.abs(_temp) - 1 > 1e-6:
-            print("Something wrong with unitary operations: {}".format(_temp))
+#         np.savetxt(self.output_path / "_".join([self.name, "weig.txt"]),
+#                    self.weights_list,
+#                    header="{}".format(weights_init))
 
-        self.state.load(self.initial_state)
+#     def set_state(self, input_bits):
+#         self.state = self.qns.set_state(*input_bits)
+#         self.initial_state = self.state.copy()
 
-        return loss
+#     def weights2loss(self, weights):
+#         self.qns.set_weights(weights)
+#         self.qns.update_quantum_state(self.state)
+#         self._state = self.state.copy()
 
-    def plot_results(self):
-        fig, axs = plt.subplots()
-        # ax.plot(self.weights_list[:, 0], self.weights_list[:, 1], "bo-")
-        axs.plot(self.error_list[:, 0], self.error_list[:, 1], "ro-")
+#         self.measure_circuit.update_quantum_state(self.state)
+#         _temp = inner_product(self.initial_state, self.state)
 
-        fig.savefig(self.name + "_err.png", self.error_list)
+#         self.measured_state = self.state.copy()
+#         loss = -(_temp.conjugate()*_temp).real * \
+#             np.sqrt(self.num_of_superpositon) + 1
+#         if np.abs(_temp) - 1 > 1e-6:
+#             print("Something wrong with unitary operations: {}".format(_temp))
+
+#         self.state.load(self.initial_state)
+
+#         return loss
+
+#     def plot_results(self):
+#         fig, axs = plt.subplots()
+#         # ax.plot(self.weights_list[:, 0], self.weights_list[:, 1], "bo-")
+#         axs.plot(self.error_list[:, 0], self.error_list[:, 1], "ro-")
+
+#         fig.savefig(self.name + "_err.png", self.error_list)
 
 
 def xor_bit(bit_sequence):
