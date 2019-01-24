@@ -12,87 +12,127 @@ from qulacs.state import inner_product
 from scipy import optimize
 
 
-def main_xor(states=[0b01, 0b00], iteration=500, weight=[0, 0, 0]):
-    for depth in range(1, 6):
-        xor_learn(depth, states, iteration, weight)
+def color_plot(data, figsize=(7, 6), title=None,
+               clabel=None, clim=None, cmap="seismic", logscale=False,
+               tick_labels=None, ticks=None, lims=None,
+               aspect="equal", font='sans-serif', fontsize=16,
+               tick_directions=('in', 'in'), tick_widths=(1.0, 1.0),
+               tick_levels=None,
+               **kwargs):
 
+    # if imagename is not None and isinstance(imagename, Path):
+    #     imagename = Path(imagename)
 
-def xor_learn(depth=1, states=[0b01, 0b00], iteration=500, weight=[0, 0, 0]):
-    xors = XOR_simulator(2, depth=depth)
-    xors.learn(states, iteration, weight)
+    # see https://qiita.com/skotaro/items/08dc0b8c5704c94eafb9
+    fig, ax = plt.subplots(figsize=figsize)
+    plt.rcParams['font.family'] = font  # 使用するフォント
+    plt.rcParams['font.size'] = fontsize  # フォントの大きさ
+    plt.rcParams['axes.labelsize'] = fontsize  # フォントの大きさ
+    plt.rcParams['xtick.direction'] = tick_directions[0]
+    plt.rcParams['ytick.direction'] = tick_directions[1]
+    plt.rcParams['xtick.major.width'] = tick_widths[0]
+    plt.rcParams['ytick.major.width'] = tick_widths[1]
 
+    if clim is None:
+        _norm = clr.LogNorm() if logscale else None
+    else:
+        _norm = clr.LogNorm(*clim) if logscale else clr.Normalize(*clim)
 
-def test_xor(inputbit=2, depth=1, weights=[0, 0, 0], states=[0b01, 0b00],
-             debug=True):
-    xors = XOR_simulator(inputbit, depth, debug)
-    loss = xors.test(states, weights)
+    if ticks is None:
+        _im = ax.imshow(data, norm=_norm, cmap=cmap, **kwargs)
+    else:
+        x, y = np.meshgrid(*ticks)
+        _im = ax.pcolormesh(x, y, data, norm=_norm, cmap=cmap, **kwargs)
 
-    return loss
+    if title is not None:
+        ax.set_title(title)
 
+    if tick_labels is not None:
+        ax.set_xlabel(tick_labels[0])
+        ax.set_ylabel(tick_labels[1])
 
-def scan_xor(depth=1, bias=0, states=[0b01],
-             showfig=False, savedata=True):
-    b = bias
-    w1_w2_list = []
-    ws = np.linspace(-np.pi, np.pi, 100)
-    for w1 in ws:
-        w2_list = []
-        for w2 in ws:
-            loss = test_xor(depth=depth, inputbit=2,
-                            states=states, weights=[b, w1, w2], debug=False)
-            w2_list.append(loss)
+    if lims is not None:
+        if lims[0] is not None:
+            ax.set_xlim(*lims[0])
+        if lims[1] is not None:
+            ax.set_ylim(*lims[1])
 
-        w1_w2_list.append(w2_list)
+    if aspect is not None:
+        ax.set_aspect(aspect)
 
-    fig, ax = plt.subplots()
-    _im = ax.pcolormesh(*np.meshgrid(ws, ws), w1_w2_list,
-                        cmap="jet", label="bias={}".format(bias))
+    if tick_levels is not None:
+        if tick_levels[0] is not None:
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_levels[0]))
+
+        if tick_levels[1] is not None:
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(tick_levels[1]))
 
     divider = make_axes_locatable(ax)
     cax = divider.append_axes('right', '5%', pad='3%')
-    fig.colorbar(_im, cax=cax)
+    cbar = fig.colorbar(_im, cax=cax)
+    if clabel is not None:
+        cbar.ax.set_ylabel(clabel)
 
-    if showfig:
+        # fig.savefig(".".join([imagename, "png"]))
+
+    return fig, ax
+
+
+def test_190124(bias=0.0, w3=0.0, w4=0.0):
+    depth = 4
+    input_bit_size = 3
+    meas_circ = get_measurement_circuit("XOR", input_bit_size, depth)
+    qns = QuantumNeuralSystem(meas_circ, input_bit_size, depth)
+
+    train_data_list = [0b001, 0b011, 0b110]
+    ws = np.linspace(-np.pi, np.pi, 100)
+    array_2d = []
+    for w2 in ws:
+        temp = []
+        for w1 in ws:
+            temp.append(qns.test(train_data_list, [bias, w1, w2, w3, w4]))
+
+        array_2d.append(temp)
+
+    str_input = ["|{:02b}>".format(bit) for bit in train_data_list]
+    print(str_input)
+    title = "depth={}, input={}, bias={}".format(
+        depth, str_input, [bias, "w1", "w2", w3, w4])
+
+    fig, ax = color_plot(array_2d, ticks=(ws, ws), cmap="jet",
+                         tick_labels=("w1", "w2"),
+                         title=title,
+                         clabel="loss")
+
+    fig.savefig("scan_xor_in{}_d{}b{:03d}".format(
+        train_data_list, depth, int(bias)))
+
+
+def scan_weights_in2bit(depth=1, bias=0.0, train_data_list=[0b01], show=True):
+    ws = np.linspace(-np.pi, np.pi, 100)
+    meas_circ = get_measurement_circuit("XOR", 2, depth)
+    qns = QuantumNeuralSystem(meas_circ, 2, depth)
+
+    array_2d = []
+    for w2 in ws:
+        temp = []
+        for w1 in ws:
+            temp.append(qns.test(train_data_list, [bias, w1, w2]))
+
+        array_2d.append(temp)
+
+    str_input = ["|{:02b}>".format(bit) for bit in train_data_list]
+
+    fig, ax = color_plot(array_2d, ticks=(ws, ws), cmap="jet",
+                         tick_labels=("weight 1st input", "weight 2nd input"),
+                         title="depth={}, input={}, bias={}".format(
+        depth, str_input, bias),
+        clabel="loss")
+    if show:
         plt.show()
+    else:
+        fig.savefig("test1")
 
-    fig.savefig("test_xor_in{}_d{}b{}".format(states, depth, bias))
-
-    if savedata:
-        np.savetxt("test_xor_in{}_d{}b{}.txt"
-                   .format(states, depth, bias), w1_w2_list)
-
-    return w1_w2_list
-
-
-# def TEST_unit_gate(step=3):
-#     vects = []
-#     states = []
-#     for angle in np.linspace(-np.pi, np.pi, 100):
-#         qns = QuantumNeuralSystem(1, 1)
-#         state = qns.set_state(0b001)
-
-#         qns.set_weights([0, angle], step)
-#         qns.unit_gate.update_quantum_state(state)
-
-#         cos = np.sqrt((np.cos(2 * angle) ** 2 + 1) / 2)
-#         sin = -np.sin(2 * angle)
-#         tan0 = 1 / np.sqrt(1 + np.tan(angle) ** 4)
-#         tan1 = np.tan(angle) ** 2 / np.sqrt(1 + np.tan(angle) ** 4)
-
-#         vect = np.zeros(8)
-#         vect[1] = cos * tan0
-#         vect[5] = cos * tan1
-#         vect[3] = sin * 1/2
-#         vect[7] = -sin * 1/2
-
-#         # print("state: {}".format(state.get_vector()))
-#         # print("ans: {}".format(vect))
-#         # print("diff: {}".format(state.get_vector() - vect))
-
-#         states.append(state.get_vector())
-#         vects.append(vect)
-
-#     return states, vects
 
 def play_xor_simulation(input_bit_size=2, depth=1, debug_mode=True,
                         train_data_list=[0b01, 0b10], weights=[0, 0, 0]):
@@ -117,13 +157,15 @@ class QuantumNeuralSystem:
             depth(uint): depth of quantum neural net(q-NN)
             debug_mode(bool): in debug_mode, outputs some variables
         '''
-        self.measurement_circuit = measurement_circuit
         self.input_bit_size = input_bit_size
         self.depth = depth
 
         self.qubit_count = self.input_bit_size + self.depth + 1
 
         self.debug_mode = debug_mode
+
+        self.measurement_circuit = measurement_circuit
+        self.measurement_circuit.add_P0_gate(self.qubit_count-1)
 
     def test(self, train_data_list, weights):
         """
@@ -196,7 +238,6 @@ class QuantumNeuralSystem:
             self.weights = results["x"]
             err = abs(results["fun"])
             print("{}, weight: {}, err: {}".format(i+1, results["x"], err))
-            # print(self._state)
             self.weights_list.append([i+1, *results["x"]])
             self.error_list.append([i+1, err])
 
@@ -226,16 +267,59 @@ class QuantumNeuralSystem:
         if self.debug_mode:
             self.measured_state = self.state.copy()
 
-        _temp = inner_product(self.initial_state, self.state)
-
-        loss = -(_temp.conjugate()*_temp).real + 1
-
-        if np.abs(_temp) - 1 > 1e-6:
-            print("Something wrong with unitary operations: {}".format(_temp))
+        loss = (1-inner_product(self.state, self.state).real /
+                np.prod(self.prob_in_each_steps))
 
         self.state.load(self.initial_state)
 
         return loss
+
+    def update_quantum_state(self, state):
+        '''
+        量子状態に対して量子ニューロンのゲートを作用させる．
+        各ステップごとの成功確率を返す．
+        '''
+        self.prob_in_each_steps = []
+
+        self._step_update_state(self.depth, state)
+
+    def _step_update_state(self, step, state):
+        '''
+        helper: 各ステップにおけるゲート作用
+        '''
+        _control = self.input_bit_size + step - 1
+        _target = self.input_bit_size + step
+
+        if step > 1:
+            if self.debug_mode and step == 2:
+                print("1st 1-size RUS:")
+            self._step_update_state(step - 1, state)
+            if self.debug_mode and step > 2:
+                print("1st {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
+            ciY = self._get_ciYgate(_control, _target)
+            ciY.update_quantum_state(state)
+            if self.debug_mode:
+                print("In step {} iY:\n{}\n".format(step, state.get_vector()))
+
+            if self.debug_mode and step == 2:
+                print("2nd 1-size RUS:")
+            self._step_update_state(step - 1, state)
+            if self.debug_mode and step > 2:
+                print("2nd {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
+
+        else:
+            self.unit_gate.update_quantum_state(state)
+
+            if self.debug_mode:
+                print("unit {} RUS:\n{}\n"
+                      .format(step, state.get_vector()))
+
+        prob = self._measure_0projection(_target-1, state)
+        self.prob_in_each_steps.append(prob)
+        if self.debug_mode:
+            print("prob: {}".format(prob))
+            print("Step {}: After projection: \n{}\n"
+                  .format(step, state.get_vector()))
 
     def set_state(self, *input_bits):
         self.state = QuantumState(self.qubit_count)
@@ -333,49 +417,6 @@ class QuantumNeuralSystem:
         prob = prob.real
 
         return prob
-
-    def update_quantum_state(self, state):
-        '''
-        量子状態に対して量子ニューロンのゲートを作用させる．
-        各ステップごとの成功確率を返す．
-        '''
-        self.prob_in_each_steps = []
-
-        self._step_update_state(self.depth, state)
-
-    def _step_update_state(self, step, state):
-        '''
-        helper: 各ステップにおけるゲート作用
-        '''
-        _control = self.input_bit_size + step - 1
-        _target = self.input_bit_size + step
-
-        if step > 1:
-            self._step_update_state(step - 1, state)
-            if self.debug_mode:
-                print("1st {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
-            ciY = self._get_ciYgate(_control, _target)
-            ciY.update_quantum_state(state)
-            if self.debug_mode:
-                print("In step {} iY:\n{}\n".format(step, state.get_vector()))
-
-            self._step_update_state(step - 1, state)
-            if self.debug_mode:
-                print("2nd {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
-
-        else:
-            self.unit_gate.update_quantum_state(state)
-
-            if self.debug_mode:
-                print("unit {} RUS:\n{}\n"
-                      .format(step, state.get_vector()))
-
-        prob = self._measure_0projection(_target-1, state)
-        self.prob_in_each_steps.append(prob)
-        if self.debug_mode:
-            print("prob: {}".format(prob))
-            print("Step {}: After projection: \n{}\n"
-                  .format(step, state.get_vector()))
 
     def get_neuron_circuit(self):
         self.nc = QuantumCircuit(self.qubit_count)
