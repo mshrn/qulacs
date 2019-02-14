@@ -66,13 +66,6 @@ def color_plot(data, figsize=(7, 6), title=None,
     if aspect is not None:
         ax.set_aspect(aspect)
 
-    if tick_levels is not None:
-        if tick_levels[0] is not None:
-            ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_levels[0]))
-
-        if tick_levels[1] is not None:
-            ax.yaxis.set_major_locator(ticker.MultipleLocator(tick_levels[1]))
-
     divider = make_axes_locatable(ax)
     cax = divider.append_axes('right', '5%', pad='3%')
     cbar = fig.colorbar(_im, cax=cax)
@@ -84,16 +77,7 @@ def color_plot(data, figsize=(7, 6), title=None,
     return fig, ax
 
 
-def inputs_variety(input_bit_size, depth):
-    meas_circ = get_measurement_circuit("XOR", input_bit_size, depth)
-    qns = QuantumNeuralSystem(meas_circ, input_bit_size, depth)
-    for inp in range(1, 2 ** input_bit_size):
-        train_data_list = [j for j in range(inp)]
-        scan_multi_bits(depth, input_bit_size, [
-                        0]*(input_bit_size-2), train_data_list, "state:{}".format(inp))
-
-
-def scan_multi_bits(depth, input_bit_size, weights=[], train_data_list=None,
+def scan_multi_bits(input_bit_size, depth, weights=[], train_data_list=None,
                     file_id="_0", **kwargs):
     # w1, w2について走査する．
     # if len(weights) != input_bit_size-2:
@@ -137,10 +121,12 @@ def scan_multi_bits(depth, input_bit_size, weights=[], train_data_list=None,
                                      "all",
                                      depth)
     fig.savefig(filename)
-    fig2.savefig(filename+"_ps")
+    fig2.savefig(filename + "_ps")
+    plt.close()
 
-    header = "(input, depth)=({}, {})\n weights={}".format(
-        input_bit_size, depth, [0.0, "w1", "w2", *weights])
+    header = "(input, depth)=({}, {})\n".format(input_bit_size, depth)
+    header += "weights={}".format([0.0, "w1", "w2", *weights])
+    header += "state=\n {}\n".format(qns.state)
 
     np.savetxt(filename + ".txt", array_2d, header=header)
 
@@ -237,10 +223,15 @@ class QuantumNeuralSystem:
                  debug_mode=False):
         '''
         Args:
-            measurement_circuit(QuantumCircuit): 訓練データの逆写像
-            input_bit_size(uint): number of ancilla bits
-            depth(uint): depth of quantum neural net(q-NN)
+            measurement_circuit(QuantumCircuit): 正解データ→訓練データの写像
+            input_bit_size(uint): size of input bits: i
+            depth(uint): depth of quantum neural net (:q-NN) :d
             debug_mode(bool): in debug_mode, outputs some variables
+
+        memo:
+            0~i-1 bit: input qubits
+            i~i+d-1 bit: ancilla bits for an activation.
+            i+d bit: 
         '''
         self.input_bit_size = input_bit_size
         self.depth = depth
@@ -254,10 +245,14 @@ class QuantumNeuralSystem:
         else:
             self.measurement_circuit = measurement_circuit
 
-        self.measurement_circuit.add_P0_gate(self.qubit_count - 1)
+        self.measurement_circuit.add_P0_gate(self.qubit_count-1)
         self.state = QuantumState(self.qubit_count)
 
-    def test(self, train_data_list, weights=None, show_only_initial_state=False):
+        # for debug
+        self.step = 3
+
+    def test(self, train_data_list, weights=None, show_only_initialstate=False,
+             step=3, show_unit_gate=False):
         """
         RUS回路のテストのため，各作用を経た後の状態を出力していく．
         Args:
@@ -265,17 +260,18 @@ class QuantumNeuralSystem:
             weights(array-like): initial weights
         return loss
         """
+        # for debug of unit_gate
+        if self.depth == 1:
+            self.step = step
+
         if weights is None:
-            weights = np.zeros(self.input_bit_size+1)
+            weights = np.zeros(self.input_bit_size + 1)
 
         self.set_state(*train_data_list)
-        if show_only_initial_state:
-            print(weights)
-        if self.debug_mode or show_only_initial_state:
-            # print("Initial state:\n{}\n".format(self.state.get_vector()))
+        if self.debug_mode or show_only_initialstate:
             print("Initial state:\n{}\n".format(self.state))
 
-        if show_only_initial_state:
+        if show_only_initialstate:
             return 0
 
         try:
@@ -283,11 +279,12 @@ class QuantumNeuralSystem:
         except Exception as e:
             print("loss calculation is failed: {}".format(e))
             loss = -99
-            # print(weights)
+        if show_unit_gate:
+            print(self.unit_gate)
 
         if self.debug_mode:
-            print("After measurement:\n{}\n".format(
-                self.state.get_vector()))
+            # print("After measurement:\n{}\n".format(
+            #     self.state.get_vector()))
 
             print("Loss: {}".format(loss))
 
@@ -306,13 +303,6 @@ class QuantumNeuralSystem:
             circuit_name(str): 学習したい関数や回路の名前
         return: None
         """
-
-        # 出力先の決定
-        # self.name = "{}_d{}_in{}_{}_{}".format(circuit_name,
-        #                                        self.depth,
-        #                                        self.input_bit_size,
-        #                                        train_data_list,
-        #                                        self.weights)
         self.output_path = Path("Results")
         if not self.output_path.exists():
             os.makedirs(self.output_path)
@@ -367,16 +357,10 @@ class QuantumNeuralSystem:
         Args:
             weights(array-like): 重み
         """
-        self.set_weights(weights)
+        self.set_weights(weights, self.step)
         self.update_quantum_state(self.state)
 
-
-        if self.debug_mode:
-            print("Before measurement: {}".format(self.state.get_vector()))
-        
         self.measurement_circuit.update_quantum_state(self.state)
-        if self.debug_mode:
-            self.measured_state = self.state.copy()
 
         if self.debug_mode:
             print("innner product of: {}".format(self.state.get_vector()))
@@ -410,26 +394,20 @@ class QuantumNeuralSystem:
         _target = self.input_bit_size + step
 
         if step > 1:
-            if self.debug_mode and step == 2:
-                print("1st 1-size RUS:")
+            # if self.debug_mode and step == 2:
+            #     print("1st 1-size RUS:")
             self._step_update_state(step - 1, state)
-            if self.debug_mode and step > 2:
-                print("1st {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
+            # if self.debug_mode and step > 2:
+            #     print("1st {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
             ciY = self._get_ciYgate(_control, _target)
             ciY.update_quantum_state(state)
-            if self.debug_mode:
-                print("In step {} iY:\n{}\n".format(step, state.get_vector()))
-
-            if self.debug_mode and step == 2:
-                print("2nd 1-size RUS:")
+            # if self.debug_mode:
+            #     print("In step {} iY:\n{}\n".format(step, state.get_vector()))
+            # if self.debug_mode and step == 2:
+            #     print("2nd 1-size RUS:")
             self._step_update_state(step - 1, state)
-            if self.debug_mode and step > 2:
-                print("2nd {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
-
-        if self.debug_mode:
-            print("Normalize Check: {}".format(
-                inner_product(self.state, self.state)))
-
+            # if self.debug_mode and step > 2:
+            #     print("2nd {}-size RUS:\n{}\n".format(step-1, state.get_vector()))
         else:
             self.unit_gate.update_quantum_state(state)
 
@@ -437,7 +415,10 @@ class QuantumNeuralSystem:
                 print("unit {} RUS:\n{}\n"
                       .format(step, state.get_vector()))
 
-        prob = self._measure_0projection(_target-1, state)
+        if self.debug_mode:
+            print("Normalize Check: {}".format(
+                inner_product(self.state, self.state)))
+        prob = self._measure_0projection(_target-1)
         self.prob_in_each_steps.append(prob)
         if self.debug_mode:
             print("prob: {}".format(prob))
@@ -476,9 +457,9 @@ class QuantumNeuralSystem:
         count = 0
 
         # R_y
-        self.unit_gate = RY(target, -self.weights[0])
+        self.unit_gate = RY(target, -2*self.weights[0])
         for control_bit, weight in enumerate(self.weights[1:]):
-            c_ry_mat = self._get_cRY_gate(-weight, control_bit, target)
+            c_ry_mat = self._get_cRY_gate(-2*weight, control_bit, target)
             self.unit_gate = merge(self.unit_gate, c_ry_mat)
 
         count += 1
@@ -498,9 +479,9 @@ class QuantumNeuralSystem:
             return self.unit_gate
 
         # R_y^\dagger
-        self.unit_gate = merge(self.unit_gate, RY(target, self.weights[0]))
+        self.unit_gate = merge(self.unit_gate, RY(target, 2*self.weights[0]))
         for control_bit, weight in enumerate(self.weights[1:]):
-            c_ry_mat = self._get_cRY_gate(weight, control_bit, target)
+            c_ry_mat = self._get_cRY_gate(2*weight, control_bit, target)
             self.unit_gate = merge(self.unit_gate, c_ry_mat)
 
         return self.unit_gate
@@ -531,14 +512,14 @@ class QuantumNeuralSystem:
 
         return iY
 
-    def _measure_0projection(self, target, state):
+    def _measure_0projection(self, target):
         '''
         helper: P0の射影を取り，確率を返す．
         '''
-        _state = state.copy()
-        P0(target).update_quantum_state(state)
-
-        prob = inner_product(_state, state) / inner_product(_state, _state)
+        _state = self.state.copy()
+        P0(target).update_quantum_state(self.state)
+        prob = inner_product(_state, self.state) / \
+            inner_product(_state, _state)
         prob = prob.real
 
         return prob
