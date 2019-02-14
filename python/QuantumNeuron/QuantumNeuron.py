@@ -126,7 +126,7 @@ def scan_multi_bits(depth, input_bit_size, weights=[], train_data_list=None,
                          tick_labels=("w1", "w2"),
                          title=title,
                          clabel="loss")
-    fig2, ax2 = color_plot(array_2d, ticks=(ws, ws), cmap="jet",
+    fig2, ax2 = color_plot(array_2d_s, ticks=(ws, ws), cmap="jet",
                            tick_labels=("w1", "w2"),
                            title=title,
                            clabel="sampling counts")
@@ -134,7 +134,7 @@ def scan_multi_bits(depth, input_bit_size, weights=[], train_data_list=None,
     # filename = "scan_xor_input{}_d{}_{}".format(
     #     input_bit_size, depth, file_id)
     filename = "{}bit_{}_d{}".format(input_bit_size,
-                                     train_data_list,
+                                     "all",
                                      depth)
     fig.savefig(filename)
     fig2.savefig(filename+"_ps")
@@ -370,10 +370,16 @@ class QuantumNeuralSystem:
         self.set_weights(weights)
         self.update_quantum_state(self.state)
 
+
+        if self.debug_mode:
+            print("Before measurement: {}".format(self.state.get_vector()))
+        
         self.measurement_circuit.update_quantum_state(self.state)
         if self.debug_mode:
             self.measured_state = self.state.copy()
 
+        if self.debug_mode:
+            print("innner product of: {}".format(self.state.get_vector()))
         loss = (1-inner_product(self.state, self.state).real /
                 np.prod(self.prob_in_each_steps))
 
@@ -385,7 +391,7 @@ class QuantumNeuralSystem:
         return loss
 
     def get_sampling_counts(self):
-        return np.prod(self.prob_in_each_steps)
+        return 1.0/np.prod(self.prob_in_each_steps)
 
     def update_quantum_state(self, state):
         '''
