@@ -77,6 +77,10 @@ def color_plot(data, figsize=(7, 6), title=None,
     return fig, ax
 
 
+def func(n, thetas):
+    return (np.cos(thetas)**(2**(n+1)) + np.sin(thetas)**(2**(n+1)))/(np.cos(thetas)**(2**(n)) + np.sin(thetas)**(2**(n)))
+
+
 def scan_probability(depth):
     qns = QuantumNeuralSystem(2, depth)
     prob = []
@@ -86,7 +90,9 @@ def scan_probability(depth):
 
     fig, ax = plt.subplots()
 
-    ax.plot(np.linspace(0, 2 * np.pi, 100), prob)
+    thetas = np.linspace(0, 2 * np.pi, 100)
+    ax.plot(thetas, prob)
+    ax.plot(thetas, func(depth, thetas))
     fig.show()
 
 
@@ -226,12 +232,6 @@ def play_xor_simulation(input_bit_size=2, depth=1, debug_mode=True,
 
 
 class QuantumNeuralSystem:
-    '''
-    0~n_i-1:input_qubit,
-    n_i~n_i+d-1: ancilla_qubit,
-    n_i+d: output_qubit．
-    '''
-
     def __init__(self, input_bit_size, depth=1, measurement_circuit=None,
                  debug_mode=False):
         '''
@@ -242,9 +242,9 @@ class QuantumNeuralSystem:
             debug_mode(bool): in debug_mode, outputs some variables
 
         memo:
-            0~i-1 bit: input qubits
-            i~i+d-1 bit: ancilla bits for an activation.
-            i+d bit: 
+            (0~i-1)-th bit: input qubits
+            (i~i+d-1)-th bit: ancilla bits for an activation.
+            (i+d)th bit: output_qubit
         '''
         self.input_bit_size = input_bit_size
         self.depth = depth
@@ -273,37 +273,33 @@ class QuantumNeuralSystem:
             weights(array-like): initial weights
         return loss
         """
-        # for debug of unit_gate
-        if self.depth == 1:
-            self.step = step
-
-        if weights is None:
-            weights = np.zeros(self.input_bit_size + 1)
 
         self.set_state(*train_data_list)
+
         if self.debug_mode or show_only_initialstate:
             print("Initial state:\n{}\n".format(self.state))
-
-        if show_only_initialstate:
-            return 0
+            if show_only_initialstate:
+                return 0
+            # for debug of unit_gate
+            if self.depth == 1:
+                self.step = step
 
         try:
+            if weights is None:
+                weights = np.zeros(self.input_bit_size + 1)
             loss = self.weights2loss(weights)
         except Exception as e:
             print("loss calculation is failed: {}".format(e))
-            loss = -99
+            loss = np.nan
+
         if show_unit_gate:
             print(self.unit_gate)
 
         if self.debug_mode:
-            # print("After measurement:\n{}\n".format(
-            #     self.state.get_vector()))
-
             print("Loss: {}".format(loss))
-
             print("Probs: {}".format(self.prob_in_each_steps))
 
-        return loss, self.get_sampling_counts()
+        return loss, 1./self.get_success_rate()
 
     def learn(self, train_data_list, weights=None,
               iteration=500, loss_tol=1e-9, circuit_name="XOR"):
@@ -377,6 +373,7 @@ class QuantumNeuralSystem:
 
         if self.debug_mode:
             print("innner product of: {}".format(self.state.get_vector()))
+
         loss = (1-inner_product(self.state, self.state).real /
                 np.prod(self.prob_in_each_steps))
 
@@ -387,8 +384,8 @@ class QuantumNeuralSystem:
 
         return loss
 
-    def get_sampling_counts(self):
-        return 1.0/np.prod(self.prob_in_each_steps)
+    def get_success_rate(self):
+        return np.prod(self.prob_in_each_steps)
 
     def update_quantum_state(self, state):
         '''
@@ -396,7 +393,6 @@ class QuantumNeuralSystem:
         各ステップごとの成功確率を返す．
         '''
         self.prob_in_each_steps = []
-
         self._step_update_state(self.depth, state)
 
     def _step_update_state(self, step, state):
@@ -428,9 +424,10 @@ class QuantumNeuralSystem:
                 print("unit {} RUS:\n{}\n"
                       .format(step, state.get_vector()))
 
-        if self.debug_mode:
-            print("Normalize Check: {}".format(
-                inner_product(self.state, self.state)))
+        # if self.debug_mode:
+        #     print("Normalize Check: {}".format(
+        #         inner_product(self.state, self.state)))
+
         prob = self._measure_0projection(_target-1)
         self.prob_in_each_steps.append(prob)
         if self.debug_mode:
