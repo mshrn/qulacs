@@ -77,6 +77,19 @@ def color_plot(data, figsize=(7, 6), title=None,
     return fig, ax
 
 
+def scan_probability(depth):
+    qns = QuantumNeuralSystem(2, depth)
+    prob = []
+    for theta in np.linspace(0, 2 * np.pi, 100):
+        loss, sampling = qns.test([0b11], weights=[theta, 0, 0])
+        prob.append(1 / sampling)
+
+    fig, ax = plt.subplots()
+
+    ax.plot(np.linspace(0, 2 * np.pi, 100), prob)
+    fig.show()
+
+
 def scan_multi_bits(input_bit_size, depth, weights=[], train_data_list=None,
                     file_id="_0", **kwargs):
     # w1, w2について走査する．
