@@ -459,27 +459,25 @@ class QuantumNeuralSystem:
     def set_unit_gate(self):
         '''
         RUSの基本回路(測定は別で行う)を作成する．
-        Args:
         '''
         target = self.input_bit_size
 
         # R_y
-        self.unit_gate = RY(target, -2*self.weights[0])
+        self.unit_gate = QuantumCircuit(self.qubit_count)
+        self.unit_gate.add_RY_gate(target, -2 * self.weights[0])
         for control_bit, weight in enumerate(self.weights[1:]):
             c_ry_mat = self._get_cRY_gate(-2*weight, control_bit, target)
-            self.unit_gate = merge(self.unit_gate, c_ry_mat)
+            self.unit_gate.add_gate(c_ry_mat)
 
-        # controlled-iY
         y_target = target + 1
         y_control = target
         ciY = self._get_ciYgate(y_control, y_target)
-        self.unit_gate = merge(self.unit_gate, ciY)
+        self.unit_gate.add_gate(ciY)
 
-        # R_y^\dagger
-        self.unit_gate = merge(self.unit_gate, RY(target, 2*self.weights[0]))
+        self.unit_gate.add_RY_gate(target, 2 * self.weights[0])
         for control_bit, weight in enumerate(self.weights[1:]):
             c_ry_mat = self._get_cRY_gate(2*weight, control_bit, target)
-            self.unit_gate = merge(self.unit_gate, c_ry_mat)
+            self.unit_gate.add_gate(c_ry_mat)
 
         return self.unit_gate
 
