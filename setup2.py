@@ -12,6 +12,10 @@ _VERSION = '0.1.0'
 
 project_name = 'Qulacs'
 
+GCC = "/usr/local/Cellar/gcc/8.2.0/bin/gcc-8"
+GXX = "/usr/local/Cellar/gcc/8.2.0/bin/g++-8"
+
+
 class CMakeExtension(Extension):
     def __init__(self, name, sourcedir=''):
         Extension.__init__(self, name, sources=[])
@@ -26,12 +30,14 @@ class CMakeBuild(build_ext):
             raise RuntimeError("CMake must be installed to build the following extensions: " +
                                ", ".join(e.name for e in self.extensions))
 
-        cmake_version = LooseVersion(re.search(r'version\s*([\d.]+)', out.decode()).group(1))
+        cmake_version = LooseVersion(
+            re.search(r'version\s*([\d.]+)', out.decode()).group(1))
         for ext in self.extensions:
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
+        extdir = os.path.abspath(os.path.dirname(
+            self.get_ext_fullpath(ext.name)))
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
                       '-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=' + extdir,
                       '-DPYTHON_EXECUTABLE=' + sys.executable,
@@ -41,26 +47,31 @@ class CMakeBuild(build_ext):
         build_args = ['--config', cfg]
 
         if platform.system() == "Windows":
-            cmake_args += ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir)]
-            cmake_args += ['-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir)]
+            cmake_args += [
+                '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir)]
+            cmake_args += [
+                '-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir)]
             if sys.maxsize > 2**32:
                 cmake_args += ['-A', 'x64']
             build_args += ['--', '/m']
         else:
             try:
-                gcc_out = subprocess.check_output(['gcc', '-dumpfullversion', '-dumpversion']).decode()
+                gcc_out = subprocess.check_output(
+                    [GCC, '-dumpfullversion', '-dumpversion']).decode()
                 gcc_version = LooseVersion(gcc_out)
-                gxx_out = subprocess.check_output(['g++', '-dumpfullversion', '-dumpversion']).decode()
+                gxx_out = subprocess.check_output(
+                    [GXX, '-dumpfullversion', '-dumpversion']).decode()
                 gxx_version = LooseVersion(gxx_out)
+
             except OSError:
                 raise RuntimeError("gcc/g++ must be installed to build the following extensions: " +
-                               ", ".join(e.name for e in self.extensions))
+                                   ", ".join(e.name for e in self.extensions))
             if(gcc_version >= LooseVersion('7.0.0')):
-                cmake_args += ['-DCMAKE_C_COMPILER=gcc']
+                cmake_args += ['-DCMAKE_C_COMPILER={}'.format(GCC)]
             else:
                 cmake_args += ['-DCMAKE_C_COMPILER=gcc-7']
             if(gxx_version >= LooseVersion('7.0.0')):
-                cmake_args += ['-DCMAKE_CXX_COMPILER=g++']
+                cmake_args += ['-DCMAKE_CXX_COMPILER={}'.format(GXX)]
             else:
                 cmake_args += ['-DCMAKE_CXX_COMPILER=g++-7']
             cmake_args += ['-DCMAKE_BUILD_TYPE=' + cfg]
@@ -71,8 +82,11 @@ class CMakeBuild(build_ext):
                                                               self.distribution.get_version())
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
-        subprocess.check_call(['cmake', ext.sourcedir] + cmake_args, cwd=self.build_temp, env=env)
-        subprocess.check_call(['cmake', '--build', '.', '--target', 'python'] + build_args, cwd=self.build_temp)
+        subprocess.check_call(['cmake', ext.sourcedir] +
+                              cmake_args, cwd=self.build_temp, env=env)
+        subprocess.check_call(
+            ['cmake', '--build', '.', '--target', 'python'] + build_args, cwd=self.build_temp)
+
 
 setup(
     name=project_name,
@@ -87,7 +101,7 @@ setup(
     ext_modules=[CMakeExtension('qulacs')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
-    test_suite = 'test',
+    test_suite='test',
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Environment :: Console',
