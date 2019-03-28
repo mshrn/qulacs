@@ -17,68 +17,9 @@ def main():
     pass
 
 
-def color_plot(data, figsize=(7, 6), title=None,
-               clabel=None, clim=None, cmap="seismic", logscale=False,
-               tick_labels=None, ticks=None, lims=None,
-               aspect="equal", font='sans-serif', fontsize=16,
-               tick_directions=('in', 'in'), tick_widths=(1.0, 1.0),
-               tick_levels=None,
-               **kwargs):
-
-    # if imagename is not None and isinstance(imagename, Path):
-    #     imagename = Path(imagename)
-
-    # see https://qiita.com/skotaro/items/08dc0b8c5704c94eafb9
-    fig, ax = plt.subplots(figsize=figsize)
-    plt.rcParams['font.family'] = font  # 使用するフォント
-    plt.rcParams['font.size'] = fontsize  # フォントの大きさ
-    plt.rcParams['axes.labelsize'] = fontsize  # フォントの大きさ
-    plt.rcParams['xtick.direction'] = tick_directions[0]
-    plt.rcParams['ytick.direction'] = tick_directions[1]
-    plt.rcParams['xtick.major.width'] = tick_widths[0]
-    plt.rcParams['ytick.major.width'] = tick_widths[1]
-
-    if clim is None:
-        _norm = clr.LogNorm() if logscale else None
-    else:
-        _norm = clr.LogNorm(*clim) if logscale else clr.Normalize(*clim)
-
-    if ticks is None:
-        _im = ax.imshow(data, norm=_norm, cmap=cmap, **kwargs)
-    else:
-        x, y = np.meshgrid(*ticks)
-        _im = ax.pcolormesh(x, y, data, norm=_norm, cmap=cmap, **kwargs)
-
-    if title is not None:
-        ax.set_title(title)
-
-    if tick_labels is not None:
-        ax.set_xlabel(tick_labels[0])
-        ax.set_ylabel(tick_labels[1])
-
-    if lims is not None:
-        if lims[0] is not None:
-            ax.set_xlim(*lims[0])
-        if lims[1] is not None:
-            ax.set_ylim(*lims[1])
-
-    if aspect is not None:
-        ax.set_aspect(aspect)
-
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes('right', '5%', pad='3%')
-    cbar = fig.colorbar(_im, cax=cax)
-    if clabel is not None:
-        cbar.ax.set_ylabel(clabel)
-
-        # fig.savefig(".".join([imagename, "png"]))
-
-    return fig, ax
-
-
-def func(n, thetas):
+def analytic_probability_RUS(n, thetas):
     x = np.cos(thetas)**(2 ** (n + 1)) + np.sin(thetas)**(2 ** (n + 1))
-    y = np.cos(thetas)**(2**(n)) + np.sin(thetas)**(2**(n))
+    y = np.cos(thetas)**(2**n) + np.sin(thetas)**(2**n)
     return x/y
 
 
@@ -93,7 +34,7 @@ def scan_probability(depth):
 
     thetas = np.linspace(0, 2 * np.pi, 100)
     ax.plot(thetas, prob)
-    ax.plot(thetas, func(depth, thetas))
+    ax.plot(thetas, analytic_probability_RUS(depth, thetas))
     fig.show()
 
 
@@ -126,14 +67,14 @@ def scan_multi_bits(input_bit_size, depth, weights=[], train_data_list=None,
 
     title = "(input, depth)=({}, {})\n weights={}".format(
         input_bit_size, depth, [0.0, "w1", "w2", *weights])
-    fig, ax = color_plot(array_2d, ticks=(ws, ws), cmap="jet",
+    fig, _ = color_plot(array_2d, ticks=(ws, ws), cmap="jet",
+                        tick_labels=("w1", "w2"),
+                        title=title,
+                        clabel="loss")
+    fig2, _ = color_plot(array_2d_s, ticks=(ws, ws), cmap="jet",
                          tick_labels=("w1", "w2"),
                          title=title,
-                         clabel="loss")
-    fig2, ax2 = color_plot(array_2d_s, ticks=(ws, ws), cmap="jet",
-                           tick_labels=("w1", "w2"),
-                           title=title,
-                           clabel="sampling counts")
+                         clabel="sampling counts")
 
     # filename = "scan_xor_input{}_d{}_{}".format(
     #     input_bit_size, depth, file_id)
@@ -149,39 +90,6 @@ def scan_multi_bits(input_bit_size, depth, weights=[], train_data_list=None,
     header += "state=\n {}\n".format(qns.state)
 
     np.savetxt(filename + ".txt", array_2d, header=header)
-
-
-def test_190124(bias=0.0, w3=0.0, no=0):
-    # 入力3bitの実験
-    depth = 4
-    input_bit_size = 3
-    meas_circ = get_measurement_circuit("XOR", input_bit_size, depth)
-    qns = QuantumNeuralSystem(meas_circ, input_bit_size, depth)
-
-    train_data_list = [0b001, 0b011, 0b110]
-    ws = np.linspace(-np.pi, np.pi, 100)
-    array_2d = []
-    for w2 in ws:
-        temp = []
-        for w1 in ws:
-            temp.append(qns.test(train_data_list, [bias, w1, w2, w3]))
-
-        array_2d.append(temp)
-
-    str_input = ["|{:03b}>".format(bit) for bit in train_data_list]
-    title = "depth={}\n input={}\n weights={}".format(
-        depth, str_input, [bias, "w1", "w2", w3])
-
-    fig, ax = color_plot(array_2d, ticks=(ws, ws), cmap="jet",
-                         tick_labels=("w1", "w2"),
-                         title=title,
-                         clabel="loss")
-
-    filename = "scan_xor_in{}_d{}_no{}".format(
-        train_data_list, depth, no)
-    fig.savefig(filename)
-
-    np.savetxt(filename+".txt", array_2d)
 
 
 def scan_weights_in2bit(depth=1, bias=0.0, train_data_list=[0b01], show=True):
@@ -277,7 +185,6 @@ class QuantumNeuralSystem:
             print("Initial state:\n{}\n".format(self.state))
             if show_only_initialstate:
                 return 0
-            # for debug of unit_gate
 
         try:
             if weights is None:
@@ -345,7 +252,7 @@ class QuantumNeuralSystem:
                    self.loss_list,
                    header="{}".format(weights_init))
 
-        np.savetxt(self.output_path / "_".join([filename, "postselection.txt"]),
+        np.savetxt(self.output_path / "_".join([filename, "postselect.txt"]),
                    self.post_selection_num_list,
                    header="{}".format(weights_init))
 
@@ -559,20 +466,6 @@ def get_measurement_circuit(name, input_bit_size, depth):
     return measure_circuit
 
 
-def xor_bit(bit_sequence):
-    '''
-    与えられたビット列について各ビットの排他的論理総和を返す
-    '''
-    xor = 0
-    while (bit_sequence > 0):
-        # print(int(bit_sequence) % 2)
-        xor ^= int(bit_sequence) % 2
-
-        bit_sequence = int(bit_sequence) / 2
-
-    return xor
-
-
 def check_nelder_mead():
     def func(x):
         return (x - 3) ** 2 - 9
@@ -582,6 +475,65 @@ def check_nelder_mead():
                                 options={"adaptive": True,
                                          "maxiter": 100})
     print(results["x"])
+
+
+def color_plot(data, figsize=(7, 6), title=None,
+               clabel=None, clim=None, cmap="seismic", logscale=False,
+               tick_labels=None, ticks=None, lims=None,
+               aspect="equal", font='sans-serif', fontsize=16,
+               tick_directions=('in', 'in'), tick_widths=(1.0, 1.0),
+               tick_levels=None,
+               **kwargs):
+
+    # if imagename is not None and isinstance(imagename, Path):
+    #     imagename = Path(imagename)
+
+    # see https://qiita.com/skotaro/items/08dc0b8c5704c94eafb9
+    fig, ax = plt.subplots(figsize=figsize)
+    plt.rcParams['font.family'] = font  # 使用するフォント
+    plt.rcParams['font.size'] = fontsize  # フォントの大きさ
+    plt.rcParams['axes.labelsize'] = fontsize  # フォントの大きさ
+    plt.rcParams['xtick.direction'] = tick_directions[0]
+    plt.rcParams['ytick.direction'] = tick_directions[1]
+    plt.rcParams['xtick.major.width'] = tick_widths[0]
+    plt.rcParams['ytick.major.width'] = tick_widths[1]
+
+    if clim is None:
+        _norm = clr.LogNorm() if logscale else None
+    else:
+        _norm = clr.LogNorm(*clim) if logscale else clr.Normalize(*clim)
+
+    if ticks is None:
+        _im = ax.imshow(data, norm=_norm, cmap=cmap, **kwargs)
+    else:
+        x, y = np.meshgrid(*ticks)
+        _im = ax.pcolormesh(x, y, data, norm=_norm, cmap=cmap, **kwargs)
+
+    if title is not None:
+        ax.set_title(title)
+
+    if tick_labels is not None:
+        ax.set_xlabel(tick_labels[0])
+        ax.set_ylabel(tick_labels[1])
+
+    if lims is not None:
+        if lims[0] is not None:
+            ax.set_xlim(*lims[0])
+        if lims[1] is not None:
+            ax.set_ylim(*lims[1])
+
+    if aspect is not None:
+        ax.set_aspect(aspect)
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', '5%', pad='3%')
+    cbar = fig.colorbar(_im, cax=cax)
+    if clabel is not None:
+        cbar.ax.set_ylabel(clabel)
+
+        # fig.savefig(".".join([imagename, "png"]))
+
+    return fig, ax
 
 
 if __name__ == "__main__":
