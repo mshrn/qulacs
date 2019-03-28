@@ -18,16 +18,22 @@ def main():
 
 
 def analytic_probability_RUS(n, thetas):
+    """
+    For debug: 帰納的に予想されるRUSの成功確率の解析式から成功確率を返す．(間違ってるかも？)
+    """
     x = np.cos(thetas)**(2 ** (n + 1)) + np.sin(thetas)**(2 ** (n + 1))
     y = np.cos(thetas)**(2**n) + np.sin(thetas)**(2**n)
     return x/y
 
 
 def scan_probability(depth):
+    """
+    For debug: 解析式とシミュレーションでRUSの成功確率が一致するかを確認する．
+    """
     qns = QuantumNeuralSystem(2, depth)
     prob = []
     for theta in np.linspace(0, 2 * np.pi, 100):
-        loss, sampling = qns.test([0b11], weights=[theta, 0, 0])
+        _, sampling = qns.test([0b11], weights=[theta, 0, 0])
         prob.append(1 / sampling)
 
     fig, ax = plt.subplots()
@@ -40,9 +46,15 @@ def scan_probability(depth):
 
 def scan_multi_bits(input_bit_size, depth, weights=[], train_data_list=None,
                     file_id="_0", **kwargs):
-    # w1, w2について走査する．
-    # if len(weights) != input_bit_size-2:
-    #     raise ValueError("SizeError")
+    """
+    For debug: ある入力に対して重みw1, w2を走査してロスを計算する．weightsはその他の固定重み．
+    Args:
+        input_bit_size(uint): 入力ビットのビット長
+        depth(uint): RUSのdepth
+        weights(iterable): 重みパラメーター
+        train_data_list(array-like): 入力データのリスト
+        file_id(str): ファイル名の拡張子前の接尾辞
+    """
 
     qns = QuantumNeuralSystem(input_bit_size, depth)
 
@@ -66,7 +78,7 @@ def scan_multi_bits(input_bit_size, depth, weights=[], train_data_list=None,
         array_2d_s.append(temp_s)
 
     title = "(input, depth)=({}, {})\n weights={}".format(
-        input_bit_size, depth, [0.0, "w1", "w2", *weights])
+            input_bit_size, depth, [0.0, "w1", "w2", *weights])
     fig, _ = color_plot(array_2d, ticks=(ws, ws), cmap="jet",
                         tick_labels=("w1", "w2"),
                         title=title,
@@ -76,8 +88,6 @@ def scan_multi_bits(input_bit_size, depth, weights=[], train_data_list=None,
                          title=title,
                          clabel="sampling counts")
 
-    # filename = "scan_xor_input{}_d{}_{}".format(
-    #     input_bit_size, depth, file_id)
     filename = "{}bit_{}_d{}".format(input_bit_size,
                                      "all",
                                      depth)
@@ -300,7 +310,7 @@ class QuantumNeuralSystem:
     def _step_update_state(self, step, state):
         '''
         helper: 各ステップにおけるゲート作用
-        Args: 
+        Args:
             step(int): RUSの段数
             state(qulacs.QuantumState): 量子状態
         return: None
@@ -342,6 +352,11 @@ class QuantumNeuralSystem:
                   .format(step, state.get_vector()))
 
     def set_state(self, *input_bits):
+        """
+        量子状態の設定の別の手法．指定した数字を量子状態に変換する．
+        例えば，input_bits = [0b11, 0b01] (=[3, 1])だと，
+        量子状態は|11> + |01>の重ね合わせになる．
+        """
 
         size = 2 ** self.qubit_count
         _amp = 1.0 / np.sqrt(len(input_bits))
@@ -351,6 +366,9 @@ class QuantumNeuralSystem:
         self.initial_state = self.state.copy()
 
     def load_state(self, quantum_state):
+        """
+        量子状態の読み込み．ラッパー
+        """
         self.state.load(quantum_state)
 
     def set_weights(self, weights):
@@ -433,6 +451,9 @@ class QuantumNeuralSystem:
         return prob/norm
 
     def get_neuron_circuit(self):
+        """
+        学習した量子回路を外部へQuantumCircuitのオブジェクトとして出力する．
+        """
         self.nc = QuantumCircuit(self.qubit_count)
         self.set_unit_gate()
 
