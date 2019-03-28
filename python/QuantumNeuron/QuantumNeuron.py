@@ -514,7 +514,8 @@ class QuantumNeuralSystem:
 
     def _measure_0projection(self, target):
         '''
-        helper: P0の射影を取り，確率を返す．p0 = <P0>
+        helper: P0の射影を取り，確率p0 = <P0>を返す．
+        その後ポストセレクションとしてノーマライズを行う．
         '''
         _state = self.state.copy()
         P0(target).update_quantum_state(self.state)
@@ -525,9 +526,7 @@ class QuantumNeuralSystem:
         prob = inner_product(_state, self.state).real
         print("before norm: {}, prob: {}".format(norm, prob))
 
-        print(self.state)
-        self.state.normalize(np.sqrt(prob))
-        print(self.state)
+        self.state.normalize(prob/norm)
 
         return prob/norm
 
