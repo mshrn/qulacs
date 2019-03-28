@@ -363,13 +363,10 @@ class QuantumNeuralSystem:
 
         self.measurement_circuit.update_quantum_state(self.state)
 
-        self.measurement_circuit.add_P0_gate(self.qubit_count-1)
-
         if self.debug_mode:
             print("innner product of: {}".format(self.state.get_vector()))
 
-        loss = (1-inner_product(self.state, self.state).real /
-                np.prod(self.prob_in_each_steps))
+        loss = (1-self.state.get_zero_probability(self.qubit_count-1))
 
         self.state.load(self.initial_state)
 
